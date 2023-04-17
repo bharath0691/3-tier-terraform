@@ -1,0 +1,180 @@
+trigger:
+  branches:
+    include:
+      - "main"
+    exclude:
+      - "feature/*"
+  paths:
+    include:
+    - '*'
+    exclude:
+    - '**/*.md'
+    - '**/docs/*'
+
+pool:
+  vmImage: ubuntu-22.04
+
+
+parameters:
+  - name: env
+    displayName: Deployment Environment
+    default: DEV
+    values:
+      - dev
+      - qa
+      - prod
+  - name: action
+    displayName: Terraform Action
+    default: apply
+    values:
+      - apply
+      - destroy
+
+variables:
+  - group: global-variables # Global Variable Group with Default Variables
+  - name: terraform_version
+    value: "1.4.2"
+  - name: plan_artifact
+    value: "$(Build.ArtifactStagingDirectory)/$(Build.BuildId)-plan.out"    
+  - name: env
+    value: ${{ lower(parameters.env) }}
+    
+stages:
+  - stage: TerraformPlan
+    displayName: "Terraform Plan"
+    condition: eq('${{parameters.action}}', 'apply')
+    jobs:
+      - job: TerraoformPlan
+        displayName: "Terraform Init, Validate & Plan"
+        steps:
+          - task: DockerInstaller@0
+            inputs:
+              dockerVersion: '17.09.0-ce'
+          - task: CmdLine@2
+            inputs:
+              script: |
+                docker pull bridgecrew/checkov
+                docker run --volume $(pwd):/tf bridgecrew/checkov --directory /tf --output junitxml --soft-fail > $(pwd)/CheckovReport.xml
+                docker ps -a
+              workingDirectory: $(System.DefaultWorkingDirectory)
+            displayName: "Checkov Scan for Terraform code "
+          - task: PublishTestResults@2
+            inputs:
+              testRunTitle: "Checkov Results"
+              failTaskOnFailedTests: false
+              testResultsFormat: "JUnit"
+              testResultsFiles: "CheckovReport.xml"
+              searchFolder: "$(System.DefaultWorkingDirectory)"
+            displayName: "Publish Checkov Terraform Scan Results"
+          - task: TerraformInstaller@0
+            displayName: "Installing Terraform $(terraform_version)"
+            inputs:
+              terraformVersion: $(terraform_version)
+          - task: TerraformTaskV3@3
+            displayName: "Terraform Init"
+            inputs:
+              provider: "azurerm"
+              command: "init"
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              backendServiceArm: "arm-src"
+              backendAzureRmResourceGroupName: "$(BackendResourceGroupName)"
+              backendAzureRmStorageAccountName: "$(BackendStorageAccountName)"
+              backendAzureRmContainerName: "$(BackendContainerName)"
+              backendAzureRmKey: "$(env).terraform.tfstate"
+          - task: TerraformTaskV3@3
+            displayName: "Validate Terraform Files"
+            inputs:
+              provider: "azurerm"
+              command: "validate"
+          - task: TerraformTaskV3@3
+            displayName: "Terraform Plan"
+            inputs:
+              provider: "azurerm"
+              command: "plan"
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              commandOptions: '-out=$(plan_artifact) -var-file="$(System.DefaultWorkingDirectory)/environments/${{ lower(parameters.env) }}.tfvars" -no-color'
+              environmentServiceNameAzureRM: "arm-src"
+              backendAzureRmResourceGroupName: "$(BackendResourceGroupName)"
+              backendAzureRmStorageAccountName: $(BackendStorageAccountName)
+              backendAzureRmContainerName: $(BackendContainerName)
+              backendAzureRmKey: "$(env).terraform.tfstate"
+          - publish: $(plan_artifact)
+            displayName: "Publish Artifact"
+            artifact: drop
+
+  - stage: TerraformApply
+    displayName: "Terraform Apply"
+    condition: eq('${{parameters.action}}', 'apply')
+    jobs:
+    - job: "TerraformApply"
+      steps:
+        - task: DownloadBuildArtifacts@1
+          displayName: "Downloading the Plan File from Artifact"
+          inputs:
+            buildType: "current"
+            downloadType: "single"
+            artifactName: "drop"
+            downloadPath: "$(System.ArtifactsDirectory)"
+        - task: TerraformInstaller@0
+          displayName: "Installing Terraform $(terraform_version)"
+          inputs:
+            terraformVersion: $(terraform_version)
+        - task: TerraformTaskV3@3
+          displayName: "Terraform Init"
+          inputs:
+            provider: "azurerm"
+            command: "init"
+            workingDirectory: '$(System.DefaultWorkingDirectory)'
+            backendServiceArm: "arm-src"
+            backendAzureRmResourceGroupName: "$(BackendResourceGroupName)"
+            backendAzureRmStorageAccountName: "$(BackendStorageAccountName)"
+            backendAzureRmContainerName: "$(BackendContainerName)"
+            backendAzureRmKey: "$(env).terraform.tfstate"
+        - task: TerraformTaskV3@3
+          displayName: "Terraform Apply"
+          inputs:
+            provider: "azurerm"
+            command: "apply"
+            workingDirectory: '$(System.DefaultWorkingDirectory)'
+            environmentServiceNameAzureRM: "arm-src"
+            backendServiceArm: "arm-src"
+            backendAzureRmResourceGroupName: "$(BackendResourceGroupName)"
+            backendAzureRmStorageAccountName: "$(BackendStorageAccountName)"
+            backendAzureRmContainerName: "$(BackendContainerName)"
+            backendAzureRmKey: "$(env).terraform.tfstate"
+            commandOptions: "$(System.ArtifactsDirectory)/$(Build.BuildId)-plan.out"
+  - stage: TerraformDestroy
+    displayName: "Terraform Destroy"
+    condition: eq('${{parameters.action}}', 'destroy')
+    jobs:
+      - job: TerraformDestroy
+        displayName: "Terraform Destroy"
+        steps:
+          - task: TerraformInstaller@0
+            displayName: "Installing Terraform $(terraform_version)"
+            inputs:
+              terraformVersion: $(terraform_version)
+          - task: TerraformTaskV3@3
+            displayName: "Terraform Init"
+            inputs:
+              provider: "azurerm"
+              command: "init"
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              backendServiceArm: "arm-src"
+              backendAzureRmResourceGroupName: "$(BackendResourceGroupName)"
+              backendAzureRmStorageAccountName: "$(BackendStorageAccountName)"
+              backendAzureRmContainerName: "$(BackendContainerName)"
+              backendAzureRmKey: "$(env).terraform.tfstate"
+          - task: TerraformTaskV3@3
+            displayName: "Terraform Destroy"
+            inputs:
+              provider: "azurerm"
+              command: "destroy"
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              commandOptions: '-var-file="$(System.DefaultWorkingDirectory)/environments/${{ lower(parameters.env) }}.tfvars"'
+              environmentServiceNameAzureRM: "arm-src"
+              backendServiceArm: "arm-src"
+              backendAzureRmResourceGroupName: "$(BackendResourceGroupName)"
+              backendAzureRmStorageAccountName: "$(BackendStorageAccountName)"
+              backendAzureRmContainerName: "$(BackendContainerName)"
+              backendAzureRmKey: "$(env).terraform.tfstate"
