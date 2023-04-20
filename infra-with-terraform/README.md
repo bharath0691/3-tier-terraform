@@ -4,7 +4,7 @@
 
   Three-tier architecture is a well-established software application architecture that organizes applications into three logical and physical computing tiers: the presentation tier, or user interface; the application tier, where data is processed; and the data tier, where the data associated with the application is stored and managed.
 
-# Terraform Sample for Azure PaaS (WebApp & MS SQL)
+# Terraform Sample for app service with sql db
 
 One of challenges for provisioning PaaS services is deploying applications since `terraform` does not provide native way of deploying apps (e.g, Web App and setup MS SQL). This sample terraform shows how to deploy and configure webapps and MS SQL using `terraform`.
 
